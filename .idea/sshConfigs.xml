@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="SshConfigs">
+    <configs>
+      <sshConfig authType="OPEN_SSH" host="suqi-test-two.asia-southeast1-b.resonance-381205" id="76772508-9366-49c7-aac3-cb3f15d9e41e" port="22" nameFormat="DESCRIPTIVE" username="suqi" useOpenSSHConfig="true" />
+      <sshConfig authType="OPEN_SSH" host="suqi-train-8gpu-beta.asia-southeast1-b.resonance-381205" id="d3ca86aa-e915-45ab-a29e-d84d368ee705" port="22" nameFormat="DESCRIPTIVE" username="suqi" useOpenSSHConfig="true" />
+    </configs>
+  </component>
+</project>

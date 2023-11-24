@@ -10,43 +10,58 @@ from typing import Iterable
 import torch
 
 import util.misc as utils
-from datasets.coco_eval import CocoEvaluator
-from datasets.panoptic_eval import PanopticEvaluator
+from detr_datasets.coco_eval import CocoEvaluator
+from detr_datasets.panoptic_eval import PanopticEvaluator
+import torch.distributed as dist
+from torch.cuda.amp import GradScaler, autocast
+
+train_batch_count_global = 0
+valid_batch_count_global = 0
 
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, max_norm: float = 0,
-                    max_batches_per_epoch: int = None, print_freq=100):
+                    max_batches_per_epoch: int = None, print_freq=100,
+                    writer=None, scaler=None):
+    global train_batch_count_global
     model.train()
     criterion.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Epoch: [{}]'.format(epoch)
-    
+
     batch_count = 0
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         batch_count += 1
+        train_batch_count_global += 1
         if not max_batches_per_epoch is None and batch_count > max_batches_per_epoch:
             break
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(samples)
-        loss_dict = criterion(outputs, targets)
-        weight_dict = criterion.weight_dict
-        losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+        with autocast(enabled=(scaler is not None)):
+            outputs = model(samples)
+            loss_dict = criterion(outputs, targets)
 
-        # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = utils.reduce_dict(loss_dict)
-        loss_dict_reduced_unscaled = {f'{k}_unscaled': v
-                                      for k, v in loss_dict_reduced.items()}
-        loss_dict_reduced_scaled = {k: v * weight_dict[k]
-                                    for k, v in loss_dict_reduced.items() if k in weight_dict}
-        losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
+            weight_dict = criterion.weight_dict
+            losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
-        loss_value = losses_reduced_scaled.item()
+            # reduce losses over all GPUs for logging purposes
+            loss_dict_reduced = utils.reduce_dict(loss_dict)
+            loss_dict_reduced_unscaled = {f'{k}_unscaled': v
+                                          for k, v in loss_dict_reduced.items()}
+            loss_dict_reduced_scaled = {k: v * weight_dict[k]
+                                        for k, v in loss_dict_reduced.items() if k in weight_dict}
+            losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
+
+            loss_value = losses_reduced_scaled.item()
+
+        # writer to SummerWriter
+        if writer is not None:
+            for k, v in loss_dict_reduced.items():
+                writer.add_scalar(f'loss/{k}', v.detach(), train_batch_count_global)
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
@@ -54,22 +69,35 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             sys.exit(1)
 
         optimizer.zero_grad()
-        losses.backward()
-        if max_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
-        optimizer.step()
+        if scaler is not None:
+            scaler.scale(losses).backward()
+
+            # Unscales the gradients of optimizer's assigned params in-place
+            scaler.unscale_(optimizer)
+            if max_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            losses.backward()
+            if max_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+            optimizer.step()
 
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger)
+    if dist.get_rank() == 0:
+        print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
 @torch.no_grad()
-def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, output_dir):
+def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, output_dir, writer=None):
+    global valid_batch_count_global
     model.eval()
     criterion.eval()
 
@@ -90,6 +118,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         )
 
     for samples, targets in metric_logger.log_every(data_loader, 1000, header):
+        valid_batch_count_global += 1
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -103,6 +132,12 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
                                     for k, v in loss_dict_reduced.items() if k in weight_dict}
         loss_dict_reduced_unscaled = {f'{k}_unscaled': v
                                       for k, v in loss_dict_reduced.items()}
+
+        # writer to SummerWriter
+        if writer is not None:
+            for k, v in loss_dict_reduced.items():
+                writer.add_scalar(f'loss-valid/{k}', v.detach(), valid_batch_count_global)
+
         metric_logger.update(loss=sum(loss_dict_reduced_scaled.values()),
                              **loss_dict_reduced_scaled,
                              **loss_dict_reduced_unscaled)
@@ -129,7 +164,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger)
+    if dist.get_rank() == 0:
+        print("Averaged stats:", metric_logger)
     if coco_evaluator is not None:
         coco_evaluator.synchronize_between_processes()
     if panoptic_evaluator is not None:

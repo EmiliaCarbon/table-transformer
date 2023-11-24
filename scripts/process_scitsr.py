@@ -789,7 +789,7 @@ def merge_spanning_cells_in_first_column(table_dict):
 #    - After doing this for all column header cells, if a column header cell has only blank cells above it, consume 
 #      any rows of entirely blank cells directly above it.
 #    - Blank supercells that occur after this grouping are arguably rightly annotated as supercells, but we will not
-#      annotate these as supercells at the moment for consistency with previous datasets that annotated these as blank
+#      annotate these as supercells at the moment for consistency with previous detr_datasets that annotated these as blank
 #      cells only. Detecting a blank supercell would not impact the structure inferred for the table.
 #    - Any remaining blank cells are ambiguous, and while it is not good table design to have these, they're not likely
 #      to be a nuisance.

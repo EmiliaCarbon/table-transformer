@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="JupyterPersistentConnectionParameters">
+    <option name="moduleParameters">
+      <map>
+        <entry key="$PROJECT_DIR$/.idea/table-transformer.iml">
+          <value>
+            <JupyterConnectionParameters>
+              <option name="managed" value="true" />
+              <option name="sdkName" value="Remote Python 3.10.12 (sftp://suqi@suqi-train-8gpu.asia-southeast1-b.resonance-381205:22/opt/conda/envs/docai_table/bin/python)" />
+            </JupyterConnectionParameters>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+</project>

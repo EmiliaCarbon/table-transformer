@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="e70e2166-e1a4-45d3-a6da-8520ac7aa107" name="suqi-test-two">
+        <fileTransfer accessType="SFTP" host="suqi-test-two.asia-southeast1-b.resonance-381205" port="22" sshConfigId="76772508-9366-49c7-aac3-cb3f15d9e41e" sshConfig="suqi@suqi-test-two.asia-southeast1-b.resonance-381205:22 agent" authAgent="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+      <webServer id="d962a335-1c04-4e03-b37f-6d93f8825fd7" name="suqi-train-8gpu-beta">
+        <fileTransfer accessType="SFTP" host="suqi-train-8gpu-beta.asia-southeast1-b.resonance-381205" port="22" sshConfigId="d3ca86aa-e915-45ab-a29e-d84d368ee705" sshConfig="suqi@suqi-train-8gpu-beta.asia-southeast1-b.resonance-381205:22 agent" authAgent="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>

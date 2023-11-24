@@ -10,8 +10,8 @@ from typing import Iterable
 import torch
 
 import util.misc as utils
-from datasets.coco_eval import CocoEvaluator
-from datasets.panoptic_eval import PanopticEvaluator
+from detr_datasets.coco_eval import CocoEvaluator
+from detr_datasets.panoptic_eval import PanopticEvaluator
 
 
 def train_one_epoch(model_list, criterion_list,
@@ -22,25 +22,26 @@ def train_one_epoch(model_list, criterion_list,
         model.train()
     for criterion in criterion_list:
         criterion.train()
-        
-    #metric_loggers = []
-    #headers = []
-    #for model in model_list:
+
+    # metric_loggers = []
+    # headers = []
+    # for model in model_list:
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Epoch: [{}]'.format(epoch)
-        
+
     #    metric_loggers.append(metric_logger)
     #    headers.append(header)
-    
+
     batch_count = 0
     while not max_batches_per_epoch is None and batch_count <= max_batches_per_epoch:
         for model, criterion, data_loader in zip(model_list, criterion_list, data_loader_list):
             alternating_count = 0
             for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
                 alternating_count += 1
-                if alternating_count > print_freq or (not max_batches_per_epoch is None and batch_count > max_batches_per_epoch):
+                if alternating_count > print_freq or (
+                        not max_batches_per_epoch is None and batch_count > max_batches_per_epoch):
                     break
                 batch_count += 1
                 samples = samples.to(device)
@@ -77,7 +78,7 @@ def train_one_epoch(model_list, criterion_list,
                 metric_logger.update(lr=optimizer.param_groups[0]["lr"])
             # gather the stats from all processes
             metric_logger.synchronize_between_processes()
-            #print("Averaged stats:", metric_logger)
+            # print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 

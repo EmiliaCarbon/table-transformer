@@ -17,11 +17,10 @@ from torchvision.transforms import functional as F
 
 # Project imports
 sys.path.append("detr")
-import datasets.transforms as R
+import detr_datasets.transforms as R
 
 
 def read_pascal_voc(xml_file: str, class_map=None):
-
     tree = ET.parse(xml_file)
     root = tree.getroot()
 
@@ -30,7 +29,7 @@ def read_pascal_voc(xml_file: str, class_map=None):
 
     for object_ in root.iter('object'):
         ymin, xmin, ymax, xmax = None, None, None, None
-        
+
         label = object_.find("name").text
         try:
             label = int(label)
@@ -43,12 +42,13 @@ def read_pascal_voc(xml_file: str, class_map=None):
             ymax = float(box.find("ymax").text)
             xmax = float(box.find("xmax").text)
 
-        bbox = [xmin, ymin, xmax, ymax] # PASCAL VOC
-        
+        bbox = [xmin, ymin, xmax, ymax]  # PASCAL VOC
+
         bboxes.append(bbox)
         labels.append(label)
 
     return bboxes, labels
+
 
 def crop_around_bbox_coco(image, crop_bbox, max_margin, target):
     width, height = image.size
@@ -76,7 +76,7 @@ def crop_around_bbox_coco(image, crop_bbox, max_margin, target):
         w, h = img.size
         target["size"] = torch.tensor([w, h])
         return cropped_image, target
-                 
+
     return image, target
 
 
@@ -132,8 +132,8 @@ class RandomHorizontalFlip(object):
                 keypoints = _flip_coco_person_keypoints(keypoints, width)
                 target["keypoints"] = keypoints
         return image, target
-    
-    
+
+
 class RandomCrop(object):
     def __init__(self, prob, left_scale, top_scale, right_scale, bottom_scale):
         self.prob = prob
@@ -160,15 +160,15 @@ class RandomCrop(object):
                 if bbox[0] < bbox[2] and bbox[1] < bbox[3]:
                     cropped_bboxes.append(bbox)
                     cropped_labels.append(label)
-                         
+
             if len(cropped_bboxes) > 0:
                 target["boxes"] = torch.as_tensor(cropped_bboxes, dtype=torch.float32)
                 target["labels"] = torch.as_tensor(cropped_labels, dtype=torch.int64)
                 return cropped_image, target
 
         return image, target
-    
-    
+
+
 class RandomBlur(object):
     def __init__(self, prob, max_radius):
         self.prob = prob
@@ -180,8 +180,8 @@ class RandomBlur(object):
             image = image.filter(filter=ImageFilter.GaussianBlur(radius=radius))
 
         return image, target
-    
-    
+
+
 class RandomResize(object):
     def __init__(self, prob, min_scale_factor, max_scale_factor):
         self.prob = prob
@@ -191,25 +191,25 @@ class RandomResize(object):
     def __call__(self, image, target):
         if random.random() < self.prob:
             prob = random.random()
-            scale_factor = prob*self.max_scale_factor + (1-prob)*self.min_scale_factor
+            scale_factor = prob * self.max_scale_factor + (1 - prob) * self.min_scale_factor
             new_width = int(round(scale_factor * image.width))
             new_height = int(round(scale_factor * image.height))
             resized_image = image.resize((new_width, new_height), resample=PIL.Image.LANCZOS)
             resized_bboxes = []
             resized_labels = []
             for bbox, label in zip(target["boxes"], target["labels"]):
-                bbox = [elem*scale_factor for elem in bbox]
+                bbox = [elem * scale_factor for elem in bbox]
                 if bbox[0] < bbox[2] - 1 and bbox[1] < bbox[3] - 1:
                     resized_bboxes.append(bbox)
                     resized_labels.append(label)
-                         
+
             if len(resized_bboxes) > 0:
                 target["boxes"] = torch.as_tensor(resized_bboxes, dtype=torch.float32)
                 target["labels"] = torch.as_tensor(resized_labels, dtype=torch.int64)
                 return resized_image, target
 
         return image, target
-    
+
 
 class Normalize(object):
     def __init__(self, mean, std):
@@ -247,27 +247,28 @@ class TightAnnotationCrop(object):
     def __call__(self, img: PIL.Image.Image, target: dict):
         w, h = target['size']
         bboxes = [bbox for label, bbox in zip(target['labels'], target['boxes']) if label.item() in self.labels]
-        if len(bboxes) > 0:                    
-            object_num = random.randint(0, len(bboxes)-1)
+        if len(bboxes) > 0:
+            object_num = random.randint(0, len(bboxes) - 1)
             left = random.randint(0, self.left_max_pad)
             top = random.randint(0, self.top_max_pad)
             right = random.randint(0, self.right_max_pad)
             bottom = random.randint(0, self.bottom_max_pad)
             bbox = bboxes[object_num].tolist()
-            #target["crop_orig_size"] = torch.tensor([bbox[3]-bbox[1]+y_margin*2, bbox[2]-bbox[0]+x_margin*2])
-            #target["crop_orig_offset"] = torch.tensor([bbox[0]-x_margin, bbox[1]-y_margin])
-            region = [bbox[0], bbox[1], bbox[2]-bbox[0], bbox[3]-bbox[1]]
+            # target["crop_orig_size"] = torch.tensor([bbox[3]-bbox[1]+y_margin*2, bbox[2]-bbox[0]+x_margin*2])
+            # target["crop_orig_offset"] = torch.tensor([bbox[0]-x_margin, bbox[1]-y_margin])
+            region = [bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]]
             # transpose and add margin
-            region = [region[1]-top, region[0]-left, region[3]+top+bottom, region[2]+left+right]
+            region = [region[1] - top, region[0] - left, region[3] + top + bottom, region[2] + left + right]
             region = [round(elem) for elem in region]
             return R.crop(img, target, region)
         else:
             return img, target
 
+
 class RandomCrop(object):
     def __init__(self, prob, left_pixels, top_pixels, right_pixels, bottom_pixels):
         self.prob = prob
-        self.left_pixels= left_pixels
+        self.left_pixels = left_pixels
         self.top_pixels = top_pixels
         self.right_pixels = right_pixels
         self.bottom_pixels = bottom_pixels
@@ -290,13 +291,14 @@ class RandomCrop(object):
                 if bbox[0] < bbox[2] and bbox[1] < bbox[3]:
                     cropped_bboxes.append(bbox)
                     cropped_labels.append(label)
-                         
+
             if len(cropped_bboxes) > 0:
                 target["boxes"] = torch.as_tensor(cropped_bboxes, dtype=torch.float32)
                 target["labels"] = torch.as_tensor(cropped_labels, dtype=torch.int64)
                 return cropped_image, target
 
         return image, target
+
 
 class RandomPercentageCrop(object):
     def __init__(self, prob, left_scale, top_scale, right_scale, bottom_scale):
@@ -324,13 +326,14 @@ class RandomPercentageCrop(object):
                 if bbox[0] < bbox[2] and bbox[1] < bbox[3]:
                     cropped_bboxes.append(bbox)
                     cropped_labels.append(label)
-                         
+
             if len(cropped_bboxes) > 0:
                 target["boxes"] = torch.as_tensor(cropped_bboxes, dtype=torch.float32)
                 target["labels"] = torch.as_tensor(cropped_labels, dtype=torch.int64)
                 return cropped_image, target
 
         return image, target
+
 
 class ColorJitterWithTarget(object):
     def __init__(self, brightness=0, contrast=0, saturation=0, hue=0):
@@ -343,6 +346,7 @@ class ColorJitterWithTarget(object):
         img = self.transform(img)
 
         return img, target
+
 
 class RandomErasingWithTarget(object):
     def __init__(self, p=0.5, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=255, inplace=False):
@@ -357,6 +361,7 @@ class RandomErasingWithTarget(object):
 
         return img, target
 
+
 class ToPILImageWithTarget(object):
     def __init__(self):
         self.transform = transforms.ToPILImage()
@@ -366,31 +371,34 @@ class ToPILImageWithTarget(object):
 
         return img, target
 
+
 class RandomDilation(object):
     def __init__(self, probability=0.5, size=3):
         self.probability = probability
-        self.filter = ImageFilter.RankFilter(size, int(round(0 * size * size))) # 0 is equivalent to a min filter
+        self.filter = ImageFilter.RankFilter(size, int(round(0 * size * size)))  # 0 is equivalent to a min filter
 
     def __call__(self, img: PIL.Image.Image, target: dict):
         r = random.random()
-        
+
         if r <= self.probability:
             img = img.filter(self.filter)
-        
+
         return img, target
+
 
 class RandomErosion(object):
     def __init__(self, probability=0.5, size=3):
         self.probability = probability
-        self.filter = ImageFilter.RankFilter(size, int(round(0.6 * size * size))) # Almost a median filter
+        self.filter = ImageFilter.RankFilter(size, int(round(0.6 * size * size)))  # Almost a median filter
 
     def __call__(self, img: PIL.Image.Image, target: dict):
         r = random.random()
-        
+
         if r <= self.probability:
             img = img.filter(self.filter)
-        
+
         return img, target
+
 
 class RandomResize(object):
     def __init__(self, min_min_size, max_min_size, max_max_size):
@@ -407,15 +415,16 @@ class RandomResize(object):
             scale = self.max_max_size / current_max_size
         else:
             scale = min_size / current_min_size
-        resized_image = image.resize((int(round(scale*width)), int(round(scale*height))))
+        resized_image = image.resize((int(round(scale * width)), int(round(scale * height))))
         resized_bboxes = []
         for bbox in target["boxes"]:
-            bbox = [scale*elem for elem in bbox]
+            bbox = [scale * elem for elem in bbox]
             resized_bboxes.append(bbox)
 
         target["boxes"] = torch.as_tensor(resized_bboxes, dtype=torch.float32)
-        
+
         return resized_image, target
+
 
 class RandomMaxResize(object):
     def __init__(self, min_max_size, max_max_size):
@@ -427,14 +436,14 @@ class RandomMaxResize(object):
         current_max_size = max(width, height)
         target_max_size = random.randint(self.min_max_size, self.max_max_size)
         scale = target_max_size / current_max_size
-        resized_image = image.resize((int(round(scale*width)), int(round(scale*height))))
+        resized_image = image.resize((int(round(scale * width)), int(round(scale * height))))
         resized_bboxes = []
         for bbox in target["boxes"]:
-            bbox = [scale*elem for elem in bbox]
+            bbox = [scale * elem for elem in bbox]
             resized_bboxes.append(bbox)
 
         target["boxes"] = torch.as_tensor(resized_bboxes, dtype=torch.float32)
-        
+
         return resized_image, target
 
 
@@ -472,6 +481,10 @@ def get_structure_transform(image_set):
 
     if image_set == 'val':
         return R.Compose([RandomMaxResize(1000, 1000), normalize])
+        # return R.Compose([
+        #     RandomMaxResize(1300, 1300),
+        #     normalize
+        # ])
 
     raise ValueError(f'unknown {image_set}')
 
@@ -502,10 +515,10 @@ def _isArrayLike(obj):
 class PDFTablesDataset(torch.utils.data.Dataset):
     def __init__(self, root, transforms=None, max_size=None, do_crop=True, make_coco=False,
                  include_eval=False, max_neg=None, negatives_root=None, xml_fileset="filelist.txt",
-                image_extension='.png', class_map=None):
+                 image_extension='.png', class_map=None):
         self.root = root
         self.transforms = transforms
-        self.do_crop=do_crop
+        self.do_crop = do_crop
         self.make_coco = make_coco
         self.image_extension = image_extension
         self.include_eval = include_eval
@@ -514,7 +527,6 @@ class PDFTablesDataset(torch.utils.data.Dataset):
         self.class_set = set(class_map.values())
         self.class_set.remove(class_map['no object'])
 
-
         try:
             with open(os.path.join(root, "..", xml_fileset), 'r') as file:
                 lines = file.readlines()
@@ -522,34 +534,37 @@ class PDFTablesDataset(torch.utils.data.Dataset):
         except:
             lines = os.listdir(root)
         xml_page_ids = set([f.strip().replace(".xml", "") for f in lines if f.strip().endswith(".xml")])
-            
+
         image_directory = os.path.join(root, "..", "images")
         try:
             with open(os.path.join(image_directory, "filelist.txt"), 'r') as file:
                 lines = file.readlines()
         except:
             lines = os.listdir(image_directory)
-        png_page_ids = set([f.strip().replace(self.image_extension, "") for f in lines if f.strip().endswith(self.image_extension)])
-        
+
+        png_page_ids = set(
+            [f.strip().replace(self.image_extension, "") for f in lines if f.strip().endswith(self.image_extension)])
+
         self.page_ids = sorted(xml_page_ids.intersection(png_page_ids))
         if not max_size is None:
             random.shuffle(self.page_ids)
             self.page_ids = self.page_ids[:max_size]
         num_page_ids = len(self.page_ids)
+
         self.types = [1 for idx in range(num_page_ids)]
-            
         if not max_neg is None and max_neg > 0:
             with open(os.path.join(negatives_root, "filelist.txt"), 'r') as file:
-                neg_xml_page_ids = set([f.strip().replace(".xml", "") for f in file.readlines() if f.strip().endswith(".xml")])
+                neg_xml_page_ids = set(
+                    [f.strip().replace(".xml", "") for f in file.readlines() if f.strip().endswith(".xml")])
                 neg_xml_page_ids = neg_xml_page_ids.intersection(png_page_ids)
                 neg_xml_page_ids = sorted(neg_xml_page_ids.difference(set(self.page_ids)))
                 if len(neg_xml_page_ids) > max_neg:
                     neg_xml_page_ids = neg_xml_page_ids[:max_neg]
             self.page_ids += neg_xml_page_ids
             self.types += [0 for idx in range(len(neg_xml_page_ids))]
-        
+
         self.has_mask = False
-        
+
         if self.make_coco:
             self.dataset = {}
             self.dataset['images'] = [{'id': idx} for idx, _ in enumerate(self.page_ids)]
@@ -578,12 +593,12 @@ class PDFTablesDataset(torch.utils.data.Dataset):
             self.dataset['categories'] = [{'id': idx} for idx in self.class_list[:-1]]
 
             self.createIndex()
-            
+
     def createIndex(self):
         # create index
         print('creating index...')
         anns, cats, imgs = {}, {}, {}
-        imgToAnns,catToImgs = defaultdict(list),defaultdict(list)
+        imgToAnns, catToImgs = defaultdict(list), defaultdict(list)
         if 'annotations' in self.dataset:
             for ann in self.dataset['annotations']:
                 imgToAnns[ann['image_id']].append(ann)
@@ -615,11 +630,11 @@ class PDFTablesDataset(torch.utils.data.Dataset):
         page_id = self.page_ids[idx]
         img_path = os.path.join(self.root, "..", "images", page_id + self.image_extension)
         annot_path = os.path.join(self.root, page_id + ".xml")
-        
+
         img = Image.open(img_path).convert("RGB")
         w, h = img.size
-        
-        if self.types[idx] == 1:        
+
+        if self.types[idx] == 1:
             bboxes, labels = read_pascal_voc(annot_path, class_map=self.class_map)
 
             # Reduce class set
@@ -646,7 +661,7 @@ class PDFTablesDataset(torch.utils.data.Dataset):
         target["boxes"] = bboxes
         target["labels"] = labels
         target["image_id"] = torch.as_tensor([idx])
-        target["area"] = bboxes[:, 2] * bboxes[:, 3] # COCO area
+        target["area"] = bboxes[:, 2] * bboxes[:, 3]  # COCO area
         target["iscrowd"] = torch.zeros((num_objs,), dtype=torch.int64)
         target["orig_size"] = torch.as_tensor([int(h), int(w)])
         target["size"] = torch.as_tensor([int(h), int(w)])
@@ -656,21 +671,21 @@ class PDFTablesDataset(torch.utils.data.Dataset):
 
         if self.transforms is not None:
             img_tensor, target = self.transforms(img, target)
-        
-        #if self.include_original:
+
+        # if self.include_original:
         #    return img_tensor, target, img, img_path
 
         return img_tensor, target
 
     def __len__(self):
         return len(self.page_ids)
-    
+
     def getImgIds(self):
         return range(len(self.page_ids))
-    
+
     def getCatIds(self):
         return range(10)
-    
+
     def loadAnns(self, ids=[]):
         """
         Load anns with the specified ids.
@@ -681,7 +696,7 @@ class PDFTablesDataset(torch.utils.data.Dataset):
             return [self.anns[id] for id in ids]
         elif type(ids) == int:
             return [self.anns[ids]]
-    
+
     def getAnnIds(self, imgIds=[], catIds=[], areaRng=[]):
         """
         Get ann ids that satisfy given filter conditions. default skips that filter
@@ -702,8 +717,9 @@ class PDFTablesDataset(torch.utils.data.Dataset):
                 anns = list(itertools.chain.from_iterable(lists))
             else:
                 anns = self.dataset['annotations']
-            anns = anns if len(catIds)  == 0 else [ann for ann in anns if ann['category_id'] in catIds]
-            anns = anns if len(areaRng) == 0 else [ann for ann in anns if ann['area'] > areaRng[0] and ann['area'] < areaRng[1]]
+            anns = anns if len(catIds) == 0 else [ann for ann in anns if ann['category_id'] in catIds]
+            anns = anns if len(areaRng) == 0 else [ann for ann in anns if
+                                                   ann['area'] > areaRng[0] and ann['area'] < areaRng[1]]
 
             ids = [ann['id'] for ann in anns]
         return ids

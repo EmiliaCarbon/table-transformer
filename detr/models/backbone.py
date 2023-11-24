@@ -57,16 +57,27 @@ class FrozenBatchNorm2d(torch.nn.Module):
 
 class BackboneBase(nn.Module):
 
-    def __init__(self, backbone: nn.Module, train_backbone: bool, num_channels: int, return_interm_layers: bool):
+    def __init__(self, backbone: nn.Module, train_backbone: bool, num_channels: int, return_interm_layers: bool,
+                 **kwargs):
         super().__init__()
-        for name, parameter in backbone.named_parameters():
-            if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
-                parameter.requires_grad_(False)
-        if return_interm_layers:
-            return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
-        else:
-            return_layers = {'layer4': "0"}
-        self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
+        if kwargs['backbone_name'].startswith('resnet'):
+            for name, parameter in backbone.named_parameters():
+                if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
+                    parameter.requires_grad_(False)
+            if return_interm_layers:
+                return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
+            else:
+                return_layers = {'layer4': "0"}
+            self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
+        elif kwargs['backbone_name'].startswith('swin'):
+            for name, parameter in backbone.named_parameters():
+                if not train_backbone or 'feature' not in name and 'norm' not in name:
+                    parameter.requires_grad_(False)
+            if return_interm_layers:
+                raise NotImplementedError
+            else:
+                return_layers = {'permute': "0"}
+            self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
         self.num_channels = num_channels
 
     def forward(self, tensor_list: NestedTensor):
@@ -82,15 +93,28 @@ class BackboneBase(nn.Module):
 
 class Backbone(BackboneBase):
     """ResNet backbone with frozen BatchNorm."""
+
     def __init__(self, name: str,
                  train_backbone: bool,
                  return_interm_layers: bool,
                  dilation: bool):
-        backbone = getattr(torchvision.models, name)(
-            replace_stride_with_dilation=[False, False, dilation],
-            pretrained=True, norm_layer=FrozenBatchNorm2d)
-        num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
-        super().__init__(backbone, train_backbone, num_channels, return_interm_layers)
+        if name.startswith('resnet'):
+            backbone = getattr(torchvision.models, name)(
+                replace_stride_with_dilation=[False, False, dilation],
+                pretrained=True, norm_layer=FrozenBatchNorm2d)
+            num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
+            super().__init__(backbone, train_backbone, num_channels, return_interm_layers, backbone_name=name)
+        elif name.startswith('swin'):
+            backbone = getattr(torchvision.models, name)(pretrained=True)
+            if name in ('swin_t', 'swin_v2_t', 'swin_s', 'swin_v2_s'):
+                num_channels = 768
+            elif name in ('swin_b', 'swin_v2_b'):
+                num_channels = 1024
+            else:
+                raise NotImplementedError
+            super().__init__(backbone, train_backbone, num_channels, return_interm_layers, backbone_name=name)
+        else:
+            raise NotImplementedError
 
 
 class Joiner(nn.Sequential):

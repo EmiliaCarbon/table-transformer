@@ -1,10 +1,13 @@
 """
 Copyright (C) 2021 Microsoft Corporation
 """
+import collections
 import os
 import sys
 from collections import Counter
 import json
+from typing import List
+
 import statistics as stat
 from datetime import datetime
 import multiprocessing
@@ -18,16 +21,18 @@ from torchvision import transforms
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from fitz import Rect
+# from fitz import Rect
 from PIL import Image
 
 sys.path.append("../detr")
 import util.misc as utils
-from datasets.coco_eval import CocoEvaluator
+from detr_datasets.coco_eval import CocoEvaluator
+from table_datasets import get_structure_transform
 import postprocess
 import grits
 from grits import grits_con, grits_top, grits_loc
-
+from tqdm import tqdm
+from torchvision.ops.boxes import box_iou
 
 structure_class_names = [
     'table', 'table column', 'table row', 'table column header',
@@ -44,39 +49,39 @@ structure_class_thresholds = {
     "no object": 10
 }
 
-
 normalize = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
 
-def objects_to_cells(bboxes, labels, scores, page_tokens, structure_class_names, structure_class_thresholds, structure_class_map):
+def objects_to_cells(bboxes, labels, scores, page_tokens, structure_class_names, structure_class_thresholds,
+                     structure_class_map):
     bboxes, scores, labels = postprocess.apply_class_thresholds(bboxes, labels, scores,
-                                            structure_class_names,
-                                            structure_class_thresholds)
+                                                                structure_class_names,
+                                                                structure_class_thresholds)
 
     table_objects = []
     for bbox, score, label in zip(bboxes, scores, labels):
         table_objects.append({'bbox': bbox, 'score': score, 'label': label})
-        
-    table = {'objects': table_objects, 'page_num': 0} 
-    
+
+    table = {'objects': table_objects, 'page_num': 0}
+
     table_class_objects = [obj for obj in table_objects if obj['label'] == structure_class_map['table']]
     if len(table_class_objects) > 1:
         table_class_objects = sorted(table_class_objects, key=lambda x: x['score'], reverse=True)
     try:
         table_bbox = list(table_class_objects[0]['bbox'])
     except:
-        table_bbox = (0,0,1000,1000)
-    
+        table_bbox = (0, 0, 1000, 1000)
+
     tokens_in_table = [token for token in page_tokens if postprocess.iob(token['bbox'], table_bbox) >= 0.5]
-    
+
     # Determine the table cell structure from the objects
     table_structures, cells, confidence_score = postprocess.objects_to_cells(table, table_objects, tokens_in_table,
-                                                                    structure_class_names,
-                                                                    structure_class_thresholds)
-    
+                                                                             structure_class_names,
+                                                                             structure_class_thresholds)
+
     return table_structures, cells, confidence_score
 
 
@@ -119,14 +124,15 @@ def cells_to_adjacency_pair_list(cells, key='cell_text'):
         for column_num in cell1['column_nums']:
             # Start from the next row and stop when we encounter a non-blank cell
             # This cell is considered adjacent
-            for current_row in range(max_row+1, num_rows):
+            for current_row in range(max_row + 1, num_rows):
                 cell2_num = cell_nums_by_coordinates[(current_row, column_num)]
                 cell2 = cells[cell2_num]
                 if not cell2['cell_text'] == '':
-                    adj_bbox = [(max(cell1['bbox'][0], cell2['bbox'][0])+min(cell1['bbox'][2], cell2['bbox'][2]))/2-3,
-                                cell1['bbox'][3],
-                                (max(cell1['bbox'][0], cell2['bbox'][0])+min(cell1['bbox'][2], cell2['bbox'][2]))/2+3,
-                                cell2['bbox'][1]]
+                    adj_bbox = [
+                        (max(cell1['bbox'][0], cell2['bbox'][0]) + min(cell1['bbox'][2], cell2['bbox'][2])) / 2 - 3,
+                        cell1['bbox'][3],
+                        (max(cell1['bbox'][0], cell2['bbox'][0]) + min(cell1['bbox'][2], cell2['bbox'][2])) / 2 + 3,
+                        cell2['bbox'][1]]
                     adjacent_cell_props[cell2_num] = ('V', current_row - max_row - 1,
                                                       adj_bbox)
                     break
@@ -135,14 +141,16 @@ def cells_to_adjacency_pair_list(cells, key='cell_text'):
         for row_num in cell1['row_nums']:
             # Start from the next column and stop when we encounter a non-blank cell
             # This cell is considered adjacent
-            for current_column in range(max_column+1, num_columns):
+            for current_column in range(max_column + 1, num_columns):
                 cell2_num = cell_nums_by_coordinates[(row_num, current_column)]
                 cell2 = cells[cell2_num]
                 if not cell2['cell_text'] == '':
                     adj_bbox = [cell1['bbox'][2],
-                                (max(cell1['bbox'][1], cell2['bbox'][1])+min(cell1['bbox'][3], cell2['bbox'][3]))/2-3,
+                                (max(cell1['bbox'][1], cell2['bbox'][1]) + min(cell1['bbox'][3],
+                                                                               cell2['bbox'][3])) / 2 - 3,
                                 cell2['bbox'][0],
-                                (max(cell1['bbox'][1], cell2['bbox'][1])+min(cell1['bbox'][3], cell2['bbox'][3]))/2+3]
+                                (max(cell1['bbox'][1], cell2['bbox'][1]) + min(cell1['bbox'][3],
+                                                                               cell2['bbox'][3])) / 2 + 3]
                     adjacent_cell_props[cell2_num] = ('H', current_column - max_column - 1,
                                                       adj_bbox)
                     break
@@ -192,9 +200,9 @@ def cells_to_adjacency_pair_list_with_blanks(cells, key='cell_text'):
                 continue
             cell2_num = cell_nums_by_coordinates[(current_row, column_num)]
             cell2 = cells[cell2_num]
-            adj_bbox = [(max(cell1['bbox'][0], cell2['bbox'][0])+min(cell1['bbox'][2], cell2['bbox'][2]))/2-3,
+            adj_bbox = [(max(cell1['bbox'][0], cell2['bbox'][0]) + min(cell1['bbox'][2], cell2['bbox'][2])) / 2 - 3,
                         cell1['bbox'][3],
-                        (max(cell1['bbox'][0], cell2['bbox'][0])+min(cell1['bbox'][2], cell2['bbox'][2]))/2+3,
+                        (max(cell1['bbox'][0], cell2['bbox'][0]) + min(cell1['bbox'][2], cell2['bbox'][2])) / 2 + 3,
                         cell2['bbox'][1]]
             adjacent_cell_props[cell2_num] = ('V', current_row - max_row - 1,
                                               adj_bbox)
@@ -208,9 +216,9 @@ def cells_to_adjacency_pair_list_with_blanks(cells, key='cell_text'):
             cell2_num = cell_nums_by_coordinates[(row_num, current_column)]
             cell2 = cells[cell2_num]
             adj_bbox = [cell1['bbox'][2],
-                        (max(cell1['bbox'][1], cell2['bbox'][1])+min(cell1['bbox'][3], cell2['bbox'][3]))/2-3,
+                        (max(cell1['bbox'][1], cell2['bbox'][1]) + min(cell1['bbox'][3], cell2['bbox'][3])) / 2 - 3,
                         cell2['bbox'][0],
-                        (max(cell1['bbox'][1], cell2['bbox'][1])+min(cell1['bbox'][3], cell2['bbox'][3]))/2+3]
+                        (max(cell1['bbox'][1], cell2['bbox'][1]) + min(cell1['bbox'][3], cell2['bbox'][3])) / 2 + 3]
             adjacent_cell_props[cell2_num] = ('H', current_column - max_column - 1,
                                               adj_bbox)
 
@@ -237,8 +245,8 @@ def dar_con(true_adjacencies, pred_adjacencies):
     num_true_positives = (sum(true_c.values()) - sum((true_c - pred_c).values()))
 
     fscore, precision, recall = grits.compute_fscore(num_true_positives,
-                                               len(true_adjacencies),
-                                               len(pred_adjacencies))
+                                                     len(true_adjacencies),
+                                                     len(pred_adjacencies))
 
     return recall, precision, fscore
 
@@ -315,18 +323,18 @@ def compute_metrics(mode, true_bboxes, true_labels, true_scores, true_cells,
 
         # Compute GriTS_RawLoc (location using unprocessed bounding boxes)
         (metrics['grits_rawloc'],
-        metrics['grits_precision_rawloc'],
-        metrics['grits_recall_rawloc'],
-        metrics['grits_rawloc_upper_bound']) = grits_loc(true_cell_dilatedbbox_grid,
-                                                        pred_cell_dilatedbbox_grid)
+         metrics['grits_precision_rawloc'],
+         metrics['grits_recall_rawloc'],
+         metrics['grits_rawloc_upper_bound']) = grits_loc(true_cell_dilatedbbox_grid,
+                                                          pred_cell_dilatedbbox_grid)
 
         # Compute original DAR (directed adjacency relations) metric
         (metrics['dar_recall_con_original'], metrics['dar_precision_con_original'],
-        metrics['dar_con_original']) = dar_con_original(true_cells, pred_cells)
+         metrics['dar_con_original']) = dar_con_original(true_cells, pred_cells)
 
         # Compute updated DAR (directed adjacency relations) metric
         (metrics['dar_recall_con'], metrics['dar_precision_con'],
-        metrics['dar_con']) = dar_con_new(true_cells, pred_cells)
+         metrics['dar_con']) = dar_con_new(true_cells, pred_cells)
 
     return metrics
 
@@ -343,12 +351,12 @@ def compute_statistics(structures, cells):
         if cell['header']:
             header_rows = header_rows.union(set(cell['row_nums']))
     statistics['num_header_rows'] = len(header_rows)
-    row_heights = [float(row['bbox'][3]-row['bbox'][1]) for row in structures['rows']]
+    row_heights = [float(row['bbox'][3] - row['bbox'][1]) for row in structures['rows']]
     if len(row_heights) >= 2:
         statistics['row_height_coefficient_of_variation'] = stat.stdev(row_heights) / stat.mean(row_heights)
     else:
         statistics['row_height_coefficient_of_variation'] = 0
-    column_widths = [float(column['bbox'][2]-column['bbox'][0]) for column in structures['columns']]
+    column_widths = [float(column['bbox'][2] - column['bbox'][0]) for column in structures['columns']]
     if len(column_widths) >= 2:
         statistics['column_width_coefficient_of_variation'] = stat.stdev(column_widths) / stat.mean(column_widths)
     else:
@@ -376,7 +384,7 @@ def get_bbox_decorations(data_type, label):
         if data_type == 'detection':
             return 'brown', 0.05, 3, '//'
         else:
-            return 'brown', 0, 3, None 
+            return 'brown', 0, 3, None
     elif label == 1:
         return 'red', 0.15, 2, None
     elif label == 2:
@@ -387,7 +395,7 @@ def get_bbox_decorations(data_type, label):
         return 'cyan', 0.2, 4, '//'
     elif label == 5:
         return 'green', 0.2, 4, '\\\\'
-    
+
     return 'gray', 0, 0, None
 
 
@@ -425,7 +433,7 @@ def compute_metrics_summary(sample_metrics, mode):
 
 def print_metrics_line(name, metrics_dict, key, min_length=18):
     if len(name) < min_length:
-        name = ' '*(min_length-len(name)) + name
+        name = ' ' * (min_length - len(name)) + name
     try:
         print("{}: {:.4f}".format(name, metrics_dict[key]))
     except:
@@ -476,7 +484,7 @@ def eval_tsr_sample(target, pred_logits, pred_bboxes, mode):
                                         structure_class_thresholds, structure_class_map)
 
     metrics = compute_metrics(mode, true_bboxes, true_labels, true_scores, true_cells,
-                                pred_bboxes, pred_labels, pred_scores, pred_cells)
+                              pred_bboxes, pred_labels, pred_scores, pred_cells)
     statistics = compute_statistics(true_table_structures, true_cells)
 
     metrics.update(statistics)
@@ -485,11 +493,11 @@ def eval_tsr_sample(target, pred_logits, pred_bboxes, mode):
     return metrics
 
 
-def visualize(args, target, pred_logits, pred_bboxes):
+def visualize(args, target, pred_logits, pred_bboxes, image_extension='.jpg'):
     img_filepath = target["img_path"]
     img_filename = img_filepath.split("/")[-1]
 
-    bboxes_out_filename = img_filename.replace(".jpg", "_bboxes.jpg")
+    bboxes_out_filename = img_filename.replace(image_extension, "_bboxes.jpg")
     bboxes_out_filepath = os.path.join(args.debug_save_dir, bboxes_out_filename)
 
     img = Image.open(img_filepath)
@@ -501,51 +509,52 @@ def visualize(args, target, pred_logits, pred_bboxes):
     pred_bboxes = pred_bboxes.detach().cpu()
     pred_bboxes = [elem.tolist() for elem in rescale_bboxes(pred_bboxes, img_size)]
 
-    fig,ax = plt.subplots(1)
+    fig, ax = plt.subplots(1)
     ax.imshow(img, interpolation='lanczos')
 
     for bbox, label, score in zip(pred_bboxes, pred_labels, pred_scores):
         if ((args.data_type == 'structure' and not label > 5)
-            or (args.data_type == 'detection' and not label > 1)
-            and score > 0.5):
+                or (args.data_type == 'detection' and not label > 1)
+                and score > 0.5):
             color, alpha, linewidth, hatch = get_bbox_decorations(args.data_type,
                                                                   label)
             # Fill
-            rect = patches.Rectangle(bbox[:2], bbox[2]-bbox[0], bbox[3]-bbox[1],
+            rect = patches.Rectangle(bbox[:2], bbox[2] - bbox[0], bbox[3] - bbox[1],
                                      linewidth=linewidth, alpha=alpha,
-                                     edgecolor='none',facecolor=color,
+                                     edgecolor='none', facecolor=color,
                                      linestyle=None)
             ax.add_patch(rect)
             # Hatch
-            rect = patches.Rectangle(bbox[:2], bbox[2]-bbox[0], bbox[3]-bbox[1],
+            rect = patches.Rectangle(bbox[:2], bbox[2] - bbox[0], bbox[3] - bbox[1],
                                      linewidth=1, alpha=0.4,
-                                     edgecolor=color,facecolor='none',
-                                     linestyle='--',hatch=hatch)
+                                     edgecolor=color, facecolor='none',
+                                     linestyle='--', hatch=hatch)
             ax.add_patch(rect)
             # Edge
-            rect = patches.Rectangle(bbox[:2], bbox[2]-bbox[0], bbox[3]-bbox[1],
+            rect = patches.Rectangle(bbox[:2], bbox[2] - bbox[0], bbox[3] - bbox[1],
                                      linewidth=linewidth,
-                                     edgecolor=color,facecolor='none',
+                                     edgecolor=color, facecolor='none',
                                      linestyle="--")
-            ax.add_patch(rect) 
+            ax.add_patch(rect)
 
     fig.set_size_inches((15, 15))
     plt.axis('off')
     plt.savefig(bboxes_out_filepath, bbox_inches='tight', dpi=100)
 
     if args.data_type == 'structure':
-        img_words_filepath = os.path.join(args.table_words_dir, img_filename.replace(".jpg", "_words.json"))
-        cells_out_filename = img_filename.replace(".jpg", "_cells.jpg")
+        img_words_filepath = os.path.join(args.table_words_dir, img_filename.replace(image_extension, "_words.json"))
+        cells_out_filename = img_filename.replace(image_extension, "_cells.jpg")
         cells_out_filepath = os.path.join(args.debug_save_dir, cells_out_filename)
 
-        with open(img_words_filepath, 'r') as f:
-            tokens = json.load(f)
+        # with open(img_words_filepath, 'r') as f:
+        #     tokens = json.load(f)
+        tokens = []
 
         _, pred_cells, _ = objects_to_cells(pred_bboxes, pred_labels, pred_scores,
                                             tokens, structure_class_names,
                                             structure_class_thresholds, structure_class_map)
 
-        fig,ax = plt.subplots(1)
+        fig, ax = plt.subplots(1)
         ax.imshow(img, interpolation='lanczos')
 
         for cell in pred_cells:
@@ -554,16 +563,16 @@ def visualize(args, target, pred_logits, pred_bboxes):
                 alpha = 0.3
             else:
                 alpha = 0.125
-            rect = patches.Rectangle(bbox[:2], bbox[2]-bbox[0], bbox[3]-bbox[1], linewidth=1, 
-                                    edgecolor='none',facecolor="magenta", alpha=alpha)
+            rect = patches.Rectangle(bbox[:2], bbox[2] - bbox[0], bbox[3] - bbox[1], linewidth=1,
+                                     edgecolor='none', facecolor="magenta", alpha=alpha)
             ax.add_patch(rect)
-            rect = patches.Rectangle(bbox[:2], bbox[2]-bbox[0], bbox[3]-bbox[1], linewidth=1, 
-                                    edgecolor="magenta",facecolor='none',linestyle="--",
-                                    alpha=0.08, hatch='///')
+            rect = patches.Rectangle(bbox[:2], bbox[2] - bbox[0], bbox[3] - bbox[1], linewidth=1,
+                                     edgecolor="magenta", facecolor='none', linestyle="--",
+                                     alpha=0.08, hatch='///')
             ax.add_patch(rect)
-            rect = patches.Rectangle(bbox[:2], bbox[2]-bbox[0], bbox[3]-bbox[1], linewidth=1, 
-                                    edgecolor="magenta",facecolor='none',linestyle="--")
-            ax.add_patch(rect) 
+            rect = patches.Rectangle(bbox[:2], bbox[2] - bbox[0], bbox[3] - bbox[1], linewidth=1,
+                                     edgecolor="magenta", facecolor='none', linestyle="--")
+            ax.add_patch(rect)
 
         fig.set_size_inches((15, 15))
         plt.axis('off')
@@ -590,11 +599,12 @@ def evaluate(args, model, criterion, postprocessors, data_loader, base_ds, devic
         pred_logits_collection = []
         pred_bboxes_collection = []
         targets_collection = []
-        
+
     num_batches = len(data_loader)
     print_every = max(args.eval_step, int(math.ceil(num_batches / 100)))
     batch_num = 0
 
+    # for samples, targets in tqdm.tqdm(data_loader):
     for samples, targets in metric_logger.log_every(data_loader, print_every, header):
         batch_num += 1
         samples = samples.to(device)
@@ -629,29 +639,51 @@ def evaluate(args, model, criterion, postprocessors, data_loader, base_ds, devic
         if coco_evaluator is not None:
             coco_evaluator.update(res)
 
-        if args.data_type == "structure":
-            pred_logits_collection += list(outputs['pred_logits'].detach().cpu())
-            pred_bboxes_collection += list(outputs['pred_boxes'].detach().cpu())
+        # 计算每一例样本中每行每列的iou情况
+        for result in results:
+            scores, labels, boxes = result['scores'], result['labels'], result['boxes']
+            col_boxes = boxes[(scores > 0.5) & (labels == 1)]   # xyxy, (m, 4)
+            row_boxes = boxes[(scores > 0.5) & (labels == 2)]   # xyxy, (n, 4)
 
-            for target in targets:
-                for k, v in target.items():
-                    if not k == 'img_path':
-                        target[k] = v.cpu()
-                img_filepath = target["img_path"]
-                img_filename = img_filepath.split("/")[-1]
-                img_words_filepath = os.path.join(args.table_words_dir, img_filename.replace(".jpg", "_words.json"))
-                target["img_words_path"] = img_words_filepath
-            targets_collection += targets
+            if len(col_boxes) != 0:
+                col_iou = box_iou(col_boxes, col_boxes)     # (m, m)
+                col_indices = torch.arange(0, len(col_iou), device=col_iou.device)
+                col_iou[col_indices, col_indices] = 0
+                col_iou_max = torch.max(col_iou, dim=1)[0]
+                for idx in range(len(col_iou_max)):
+                    metric_logger.update(col_iou=col_iou_max[idx])
 
-            if batch_num % args.eval_step == 0 or batch_num == num_batches:
-                arguments = zip(targets_collection, pred_logits_collection, pred_bboxes_collection,
-                                repeat(args.mode))
-                with multiprocessing.Pool(args.eval_pool_size) as pool:
-                    metrics = pool.starmap_async(eval_tsr_sample, arguments).get()
-                tsr_metrics += metrics
-                pred_logits_collection = []
-                pred_bboxes_collection = []
-                targets_collection = []
+            if len(row_boxes) != 0:
+                row_iou = box_iou(row_boxes, row_boxes)     # (n, n)
+                row_indices = torch.arange(0, len(row_iou), device=row_iou.device)
+                row_iou[row_indices, row_indices] = 0
+                row_iou_max = torch.max(row_iou, dim=1)[0]
+                for idx in range(len(row_iou_max)):
+                    metric_logger.update(row_iou=row_iou_max[idx])
+
+        # if args.data_type == "structure":
+        #     pred_logits_collection += list(outputs['pred_logits'].detach().cpu())
+        #     pred_bboxes_collection += list(outputs['pred_boxes'].detach().cpu())
+        #
+        #     for target in targets:
+        #         for k, v in target.items():
+        #             if not k == 'img_path':
+        #                 target[k] = v.cpu()
+        #         img_filepath = target["img_path"]
+        #         img_filename = img_filepath.split("/")[-1]
+        #         img_words_filepath = os.path.join(args.table_words_dir, img_filename.replace(".jpg", "_words.json"))
+        #         target["img_words_path"] = img_words_filepath
+        #     targets_collection += targets
+        #
+        #     if batch_num % args.eval_step == 0 or batch_num == num_batches:
+        #         arguments = zip(targets_collection, pred_logits_collection, pred_bboxes_collection,
+        #                         repeat(args.mode))
+        #         with multiprocessing.Pool(args.eval_pool_size) as pool:
+        #             metrics = pool.starmap_async(eval_tsr_sample, arguments).get()
+        #         tsr_metrics += metrics
+        #         pred_logits_collection = []
+        #         pred_bboxes_collection = []
+        #         targets_collection = []
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -696,3 +728,35 @@ def eval_coco(args, model, criterion, postprocessors, data_loader_test, dataset_
     print("COCO metrics summary: AP50: {:.3f}, AP75: {:.3f}, AP: {:.3f}, AR: {:.3f}".format(
         pubmed_stats['coco_eval_bbox'][1], pubmed_stats['coco_eval_bbox'][2],
         pubmed_stats['coco_eval_bbox'][0], pubmed_stats['coco_eval_bbox'][8]))
+    print(f"Average Row IoU: {pubmed_stats['row_iou']}")
+    print(f"Average Col IoU: {pubmed_stats['col_iou']}")
+
+
+# Added by SuQi
+@torch.no_grad()
+def infer_visualize(model,
+                    samples: List[Image.Image],
+                    device,
+                    img_paths: List[str],
+                    debug_save_dir,
+                    verbose=False):
+    """
+    samples: list of Pillow Image
+    img_paths: list of image paths with length 'B'
+    """
+    model.eval()
+    trans = get_structure_transform('val')
+
+    samples = [trans(sp, {"boxes": []})[0][None, ...].to(device) for sp in samples]
+    outputs = [model(sp) for sp in samples]
+
+    Args = collections.namedtuple('Args', 'debug_save_dir data_type table_words_dir')
+    args = Args(
+        debug_save_dir=debug_save_dir,
+        data_type="structure",
+        table_words_dir=""
+    )
+
+    for output, img_path in tqdm(zip(outputs, img_paths), desc='Inferring: ', disable=not verbose):
+        pred_logits, pred_boxes = output['pred_logits'][0], output['pred_boxes'][0]
+        visualize(args, {'img_path': img_path}, pred_logits, pred_boxes)

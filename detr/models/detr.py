@@ -16,10 +16,12 @@ from .matcher import build_matcher
 from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
                            dice_loss, sigmoid_focal_loss)
 from .transformer import build_transformer
+from torchvision.ops.boxes import box_iou
 
 
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
+
     def __init__(self, backbone, transformer, num_classes, num_queries, aux_loss=False):
         """ Initializes the model.
         Parameters:
@@ -45,7 +47,6 @@ class DETR(nn.Module):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
-
             It returns a dict with the following elements:
                - "pred_logits": the classification logits (including no-object) for all queries.
                                 Shape= [batch_size x num_queries x (num_classes + 1)]
@@ -86,6 +87,7 @@ class SetCriterion(nn.Module):
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
+
     def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses, emphasized_weights={}):
         """ Create the criterion.
         Parameters:
@@ -163,6 +165,34 @@ class SetCriterion(nn.Module):
         losses['loss_giou'] = loss_giou.sum() / num_boxes
         return losses
 
+    def loss_overlap(self, outputs, targets, indices, num_boxes):
+        assert 'pred_boxes' in outputs and 'pred_logits' in outputs
+
+        # source box coordinate
+        idx = self._get_src_permutation_idx(indices)
+        src_boxes = outputs['pred_boxes'][idx]
+        src_boxes = box_ops.box_cxcywh_to_xyxy(src_boxes)  # (K, 4)
+        batch_idx = idx[0].to(src_boxes.device)  # (K,)
+
+        # target box label
+        target_classes = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)]).to(src_boxes.device)  # (K,)
+
+        batch_mask = batch_idx[None, :] == batch_idx[:, None]
+        class_mask = target_classes[None, :] == target_classes[:, None]
+        mask = batch_mask & class_mask  # (K, K)
+        # 将对角线设为False
+        ling_indices = torch.arange(0, mask.shape[0], device=mask.device)
+        mask[ling_indices, ling_indices] = False
+
+        iou = box_iou(src_boxes, src_boxes)  # (K, K)
+
+        losses = {}
+        if torch.any(mask):
+            losses['loss_overlap'] = iou[mask].mean()
+        else:
+            losses['loss_overlap'] = torch.zeros(size=(1,), device=src_boxes.device, dtype=torch.float).mean()
+        return losses
+
     def loss_masks(self, outputs, targets, indices, num_boxes):
         """Compute the losses related to the masks: the focal loss and the dice loss.
            targets dicts must contain the key "masks" containing a tensor of dim [nb_target_boxes, h, w]
@@ -209,7 +239,8 @@ class SetCriterion(nn.Module):
             'labels': self.loss_labels,
             'cardinality': self.loss_cardinality,
             'boxes': self.loss_boxes,
-            'masks': self.loss_masks
+            'masks': self.loss_masks,
+            'overlap': self.loss_overlap
         }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
@@ -259,6 +290,7 @@ class SetCriterion(nn.Module):
 
 class PostProcess(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
+
     @torch.no_grad()
     def forward(self, outputs, target_sizes):
         """ Perform the computation
@@ -304,8 +336,11 @@ class MLP(nn.Module):
 
 
 def build(args):
-    num_classes=args.num_classes
-    device = torch.device(args.device)
+    num_classes = args.num_classes
+    try:
+        device = torch.device(int(args.device))
+    except ValueError:
+        device = torch.device(args.device)
 
     backbone = build_backbone(args)
 
@@ -336,6 +371,11 @@ def build(args):
     losses = ['labels', 'boxes', 'cardinality']
     if args.masks:
         losses += ["masks"]
+
+    if args.overlap:
+        losses += ["overlap"]
+        weight_dict["loss_overlap"] = args.overlap_loss_coef
+
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                              eos_coef=args.eos_coef, losses=losses, emphasized_weights=args.emphasized_weights)
     criterion.to(device)
